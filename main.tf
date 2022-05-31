@@ -77,13 +77,13 @@ module "tgw" {
   }
 }
 
-# Create FQDN GW
+# Create FQDN Gateways on public subnets
 resource "aviatrix_gateway" "fqdn_gw" {
   count = length(module.egress_vpc.public_subnets_cidr_blocks)
 
   cloud_type     = 1
   account_name   = var.aws_account
-  gw_name        = "fqdn-gw-${count.index}"
+  gw_name        = "fqdn-gw-az-${local.az_suffix[count.index]}"
   vpc_id         = module.egress_vpc.vpc_id
   vpc_reg        = var.aws_region
   gw_size        = "t2.micro"
@@ -91,17 +91,25 @@ resource "aviatrix_gateway" "fqdn_gw" {
   single_ip_snat = true
 
   tags = {
-    name = "fqdn-gw-${count.index}"
+    name = "fqdn-gw-az-${local.az_suffix[count.index]}"
   }
 
   depends_on = [module.egress_vpc]
 }
 
-# Create an empty blacklist tag
+# Create an empty blacklist FQDN tag and attach it to FQDN gateways
 resource "aviatrix_fqdn" "blacklist_filter" {
   fqdn_tag     = "blacklist_tag"
   fqdn_enabled = true
   fqdn_mode    = "black"
+
+  dynamic "gw_filter_tag_list" {
+    for_each = aviatrix_gateway.fqdn_gw
+
+    content {
+      gw_name = gw_filter_tag_list.value.gw_name
+    }
+  }
 
   depends_on = [aviatrix_gateway.fqdn_gw]
 }
@@ -138,20 +146,6 @@ module "ssm_vpc_endpoint" {
   depends_on = [module.ssm_instance_profile]
 }
 
-# Create EC2 instances to simulate app in App-VPC 
-module "app_ec2" {
-  count = length(module.app_vpc.private_subnets)
-
-  source  = "bayupw/amazon-linux-2/aws"
-  version = "1.0.0"
-
-  vpc_id               = module.app_vpc.vpc_id
-  subnet_id            = module.app_vpc.private_subnets[count.index]
-  iam_instance_profile = module.ssm_instance_profile.aws_iam_instance_profile
-
-  depends_on = [module.app_vpc, module.ssm_vpc_endpoint]
-}
-
 # Create default route for App-VPC via TGW
 resource "aws_route" "app_vpc_to_internet" {
   count = length(module.app_vpc.private_route_table_ids)
@@ -170,4 +164,24 @@ resource "aws_route" "egress_to_app_vpc" {
   transit_gateway_id     = module.tgw.ec2_transit_gateway_id
 
   depends_on = [module.tgw]
+}
+
+# Create EC2 instances to simulate app in App-VPC 
+module "app_ec2" {
+  count = length(module.app_vpc.private_subnets)
+
+  source  = "bayupw/amazon-linux-2/aws"
+  version = "1.0.0"
+
+  vpc_id               = module.app_vpc.vpc_id
+  subnet_id            = module.app_vpc.private_subnets[count.index]
+  iam_instance_profile = module.ssm_instance_profile.aws_iam_instance_profile
+
+  instance_type                  = "t2.nano"
+  instance_hostname              = "app-az-${local.az_suffix[count.index]}"
+  random_password                = false
+  instance_password              = var.instance_password
+  enable_password_authentication = true
+
+  depends_on = [module.app_vpc, module.ssm_vpc_endpoint]
 }

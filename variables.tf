@@ -23,3 +23,13 @@ variable "vpcs" {
     }
   }
 }
+
+variable "instance_password" {
+  description = "EC2 Instance password"
+  type        = string
+  default     = "Aviatrix123#"
+}
+
+locals {
+  az_suffix = ["a", "b", "c"]
+}
